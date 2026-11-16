@@ -13,8 +13,8 @@ export const globalErrorHandling = (error, req, res, next) => {
         ? defaultErrorMessage
         : displayErrorMessage
       : displayErrorMessage,
-    stack: mood ? undefined : error.stack,
 
     extra: error?.cause?.extra || undefined,
+    stack: mood ? undefined : error.stack,
   });
 };

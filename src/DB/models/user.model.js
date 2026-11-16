@@ -24,11 +24,7 @@ const userSchema = new mongoose.Schema(
       required: [true, "Password is required"],
       minLength: 8,
     },
-    confirmPassword: {
-      type: String,
-      required: [true, "Confirm Password is required"],
-      minLength: 8,
-    },
+
     role: {
       type: String,
       enum: Object.values(UserRoleEnum),
