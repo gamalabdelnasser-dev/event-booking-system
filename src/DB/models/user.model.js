@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { UserRoleEnum } from "../../common/index.js";
+import { UserRoleEnum } from "../../Common/index.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -22,7 +22,6 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "Password is required"],
-      minLength: 8,
     },
 
     role: {

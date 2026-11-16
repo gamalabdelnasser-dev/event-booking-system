@@ -1,10 +1,17 @@
-import { ForbiddenException } from "../Common/index.js";
+import { ForbiddenException, UnauthorizedException } from "../common/index.js";
 
-export const authorization = (accessRoles = []) => {
+export const authorization = (...allowedRoles) => {
   return (req, res, next) => {
-    if (!accessRoles.includes(req.user.role)) {
-      throw ForbiddenException({ message: `Not authorized account` });
+    if (!req.user) {
+      return next(UnauthorizedException({ message: "Not authenticated" }));
     }
-    next();
+    if (!allowedRoles.includes(req.user.role)) {
+      return next(
+        ForbiddenException({
+          message: "You are not allowed to do this action",
+        }),
+      );
+    }
+    return next();
   };
 };

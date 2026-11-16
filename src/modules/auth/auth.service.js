@@ -33,32 +33,27 @@ export const signup = async (bodyData) => {
 export const login = async (bodyData, issuer) => {
   const { email, password } = bodyData;
 
-  const user = await findOne({
-    model: UserModel,
-    filters: {
-      email,
-    },
-  });
+  const user = await findOne({ model: UserModel, filters: { email } });
 
-  if (!user) {
-    throw NotFoundException({ message: `Invalid Login Credentials` });
-  }
+  const isValid =
+    user &&
+    (await compareHash({ plainText: password, hashedValue: user.password }));
 
-  if (
-    !(await compareHash({ plainText: password, hashedValue: user.password }))
-  ) {
-    throw UnauthorizedException({ message: `Invalid Login Credentials ` });
+  if (!isValid) {
+    throw UnauthorizedException({ message: "Invalid Login Credentials" });
   }
 
   return await createLoginCredentials(user, issuer);
 };
 
-export const me = async (token) => {
-  const { email } = token;
+export const me = async (authUser) => {
   const user = await findOne({
     model: UserModel,
-    filters: { email },
-    select: "-_id -password -__v -createdAt -updatedAt",
+    filters: { _id: authUser._id },
+    select: "-password -__v",
   });
+  if (!user) {
+    throw NotFoundException({ message: "User not found" });
+  }
   return user;
 };

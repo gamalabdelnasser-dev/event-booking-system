@@ -1,5 +1,6 @@
-import { generalValidationFields } from "../../Common/index.js";
 import joi from "joi";
+import { generalValidationFields } from "../../Common/index.js";
+
 export const loginSchema = {
   body: joi
     .object({
@@ -12,7 +13,7 @@ export const loginSchema = {
 export const signupSchema = {
   body: loginSchema.body
     .append({
-      name: generalValidationFields.name,
+      name: generalValidationFields.name.required(),
       confirmPassword: generalValidationFields.confirmPassword().required(),
       role: generalValidationFields.role,
     })

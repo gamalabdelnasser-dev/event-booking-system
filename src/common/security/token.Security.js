@@ -1,106 +1,122 @@
 import jwt from "jsonwebtoken";
-
 import {
   ACCESS_TOKEN_EXPIRES_IN,
   ADMIN_ACCESS_TOKEN_SECRET_KEY,
   ADMIN_REFRESH_TOKEN_SECRET_KEY,
+  ISSUER,
   REFRESH_TOKEN_EXPIRES_IN,
   USER_ACCESS_TOKEN_SECRET_KEY,
   USER_REFRESH_TOKEN_SECRET_KEY,
 } from "../../../config/config.service.js";
-import { TokenTypeEnum } from "../enums/security.enum.js";
-import {
-  BadRequestException,
-  ConflictException,
-  NotFoundException,
-} from "../response/index.js";
+import { TokenTypeEnum, UserRoleEnum } from "../enums/index.js";
+import { UnauthorizedException } from "../response/error.response.js";
 import { findOne, UserModel } from "../../DB/index.js";
-import { UserRoleEnum } from "../enums/user.enum.js";
 
+// Generate JWT
 export const generateToken = async ({
   payload = {},
   secret = USER_ACCESS_TOKEN_SECRET_KEY,
   options = {},
 }) => {
-  return jwt.sign(payload, secret, options);
+  return jwt.sign(payload, secret, { algorithm: "HS256", ...options });
 };
 
+// Verify JWT
 export const verifyToken = async ({
   token = "",
   secret = USER_ACCESS_TOKEN_SECRET_KEY,
 }) => {
-  return jwt.verify(token, secret);
+  return jwt.verify(token, secret, { algorithms: ["HS256"] });
 };
 
+// Get JWT Signatures
+export const getTokenSignature = async (userRole) => {
+  switch (userRole) {
+    case UserRoleEnum.Admin:
+      return {
+        accessSignature: ADMIN_ACCESS_TOKEN_SECRET_KEY,
+        refreshSignature: ADMIN_REFRESH_TOKEN_SECRET_KEY,
+      };
+    default:
+      return {
+        accessSignature: USER_ACCESS_TOKEN_SECRET_KEY,
+        refreshSignature: USER_REFRESH_TOKEN_SECRET_KEY,
+      };
+  }
+};
+
+// Decode and validate JWT
 export const decodeToken = async ({
   token,
   tokenType = TokenTypeEnum.Access,
 }) => {
+  if (!token) throw UnauthorizedException({ message: "Token is required" });
+
   const decoded = jwt.decode(token);
-  const [roleType, TokenType] = decoded.aud;
-  if (!decoded?.aud?.length) {
-    throw BadRequestException({ message: "Missing token audience" });
+  if (
+    !decoded ||
+    typeof decoded === "string" ||
+    !Array.isArray(decoded.aud) ||
+    decoded.aud.length !== 2
+  ) {
+    throw UnauthorizedException({ message: "Invalid token" });
   }
 
-  if (tokenType != TokenType) {
-    throw ConflictException({ message: "Unexpected Token mechanism " });
+  const [roleType, decodedTokenType] = decoded.aud;
+  if (
+    !Object.values(UserRoleEnum).includes(roleType) ||
+    decodedTokenType !== tokenType
+  ) {
+    throw UnauthorizedException({ message: "Invalid token" });
   }
 
-  const { accessSignature } = await getTokenSignature(roleType);
+  const { accessSignature, refreshSignature } =
+    await getTokenSignature(roleType);
+  const secret =
+    decodedTokenType === TokenTypeEnum.Access
+      ? accessSignature
+      : refreshSignature;
 
-  const verifiedData = await verifyToken({ token, secret: accessSignature });
+  const verifiedData = await verifyToken({ token, secret });
 
   const user = await findOne({
     model: UserModel,
     filters: { _id: verifiedData.sub },
+    select: "-password -__v",
   });
-  if (!user) {
-    throw NotFoundException("No register account ");
+  if (!user || user.role !== roleType) {
+    throw UnauthorizedException({ message: "Invalid token" });
   }
 
-  return { user, decoded };
+  return { user, decoded: verifiedData };
 };
 
-export const getTokenSignature = async (userRole) => {
-  let accessSignature = undefined;
-  let refreshSignature = undefined;
-
-  switch (userRole) {
-    case UserRoleEnum.Admin:
-      accessSignature = ADMIN_ACCESS_TOKEN_SECRET_KEY;
-      refreshSignature = ADMIN_REFRESH_TOKEN_SECRET_KEY;
-      break;
-    default:
-      accessSignature = USER_ACCESS_TOKEN_SECRET_KEY;
-      refreshSignature = USER_REFRESH_TOKEN_SECRET_KEY;
-      break;
-  }
-  return { accessSignature, refreshSignature };
-};
-
-export const createLoginCredentials = async (user, issuer) => {
+// Create Login Credentials
+export const createLoginCredentials = async (user) => {
   const { accessSignature, refreshSignature } = await getTokenSignature(
     user.role,
   );
+  const sub = user._id.toString();
 
   const access_token = await generateToken({
-    payload: { sub: user._id },
+    payload: { sub },
     secret: accessSignature,
     options: {
       audience: [user.role, TokenTypeEnum.Access],
-      issuer,
+      issuer: ISSUER,
       expiresIn: ACCESS_TOKEN_EXPIRES_IN,
     },
   });
 
   const refresh_token = await generateToken({
-    payload: { sub: user._id },
+    payload: { sub },
     secret: refreshSignature,
     options: {
       audience: [user.role, TokenTypeEnum.Refresh],
-      issuer,
+      issuer: ISSUER,
       expiresIn: REFRESH_TOKEN_EXPIRES_IN,
     },
   });
+
   return { access_token, refresh_token };
 };
