@@ -1,118 +1,111 @@
-import mongoose from "mongoose";
+import {
+  BadRequestException,
+  BookingStatusEnum,
+  ConflictException,
+  EventStatusEnum,
+  NotFoundException,
+} from "../../Common/index.js";
 import { BookingModel, EventModel } from "../../DB/index.js";
 
-// Create Booking
-export const createBooking = async (eventId, userId, quantity) => {
-  const session = await mongoose.startSession();
-  let booking;
+const ONE_DAY = 24 * 60 * 60 * 1000;
 
-  await session.withTransaction(async () => {
-    const event = await EventModel.findOneAndUpdate(
-      {
-        _id: eventId,
-        status: "published",
-        startAt: {
-          $gt: new Date(Date.now() + 60 * 60 * 1000),
-        },
-        $expr: {
-          $lte: [{ $add: ["$bookedSeats", quantity] }, "$capacity"],
-        },
-      },
-      {
-        $inc: { bookedSeats: quantity },
-      },
-      {
-        new: true,
-        session,
-      },
-    );
-    if (!event) {
-      throw createError("Event unavailable or not enough seats", 400);
-    }
-    const [newBooking] = await BookingModel.create(
-      [
-        {
-          event: eventId,
-          user: userId,
-          quantity,
-          totalPrice: event.price * quantity,
-        },
-      ],
-      { session },
-    );
+export const createBooking = async (eventId, user, seats) => {
+  seats = Number(seats);
 
-    booking = newBooking;
+  const oldBooking = await BookingModel.findOne({
+    user: user._id,
+    event: eventId,
+    status: BookingStatusEnum.Confirmed,
   });
+  if (oldBooking) {
+    throw ConflictException({
+      message: "You already have an active booking for this event",
+    });
+  }
 
-  return booking;
-};
+  const event = await EventModel.findOneAndUpdate(
+    {
+      _id: eventId,
+      status: EventStatusEnum.Published,
+      startAt: { $gt: new Date() },
+      $expr: { $lte: [{ $add: ["$bookedSeats", seats] }, "$capacity"] },
+    },
+    { $inc: { bookedSeats: seats } },
+    { new: true },
+  );
 
-// Get My Bookings
-export const getMyBookings = async (userId) => {
-  return await BookingModel.find({
-    user: userId,
-  })
-    .populate("event")
-    .sort({ createdAt: -1 });
-};
-
-// Cancel Booking
-export const cancelBooking = async (bookingId, userId) => {
-  const session = await mongoose.startSession();
-
-  let cancelledBooking;
+  if (!event) {
+    const existing = await EventModel.findById(eventId);
+    if (!existing) throw NotFoundException({ message: "Event not found" });
+    if (existing.status !== EventStatusEnum.Published) {
+      throw BadRequestException({ message: "Event is not open for booking" });
+    }
+    if (existing.startAt <= new Date()) {
+      throw BadRequestException({ message: "Event has already started" });
+    }
+    throw ConflictException({ message: "Not enough seats available" });
+  }
 
   try {
-    await session.withTransaction(async () => {
-      const booking = await BookingModel.findOne({
-        _id: bookingId,
-        user: userId,
-        status: "confirmed",
-      }).session(session);
-
-      if (!booking) {
-        throw createError("Booking not found", 404);
-      }
-
-      const event = await EventModel.findById(booking.event).session(session);
-
-      if (!event) {
-        throw createError("Event not found", 404);
-      }
-
-      if (event.startAt <= new Date(Date.now() + 24 * 60 * 60 * 1000)) {
-        throw createError(
-          "Cancellation is allowed only 24 hours before the event",
-          400,
-        );
-      }
-
-      cancelledBooking = await BookingModel.findOneAndUpdate(
-        {
-          _id: bookingId,
-          user: userId,
-          status: "confirmed",
-        },
-        {
-          $set: { status: "cancelled" },
-        },
-        {
-          new: true,
-          session,
-        },
-      );
-
-      await EventModel.updateOne(
-        { _id: event._id },
-        {
-          $inc: { bookedSeats: -booking.quantity },
-        },
-        { session },
-      );
+    const booking = await BookingModel.create({
+      user: user._id,
+      event: event._id,
+      seats,
+      totalPrice: seats * event.price, // السعر وقت الحجز
     });
-
-    return cancelledBooking;
-  } finally {
-    await session.endSession();
+    return booking;
+  } catch (error) {
+    await EventModel.updateOne(
+      { _id: event._id },
+      { $inc: { bookedSeats: -seats } },
+    );
+    if (error.code === 11000) {
+      throw ConflictException({
+        message: "You already have an active booking for this event",
+      });
+    }
+    throw error;
   }
+};
+
+export const getMyBookings = async (user) => {
+  const bookings = await BookingModel.find({ user: user._id })
+    .populate("event", "title startAt location isOnline status")
+    .sort({ createdAt: -1 });
+  return bookings;
+};
+
+export const cancelBooking = async (bookingId, user) => {
+  const booking = await BookingModel.findOne({
+    _id: bookingId,
+    user: user._id,
+  });
+  if (!booking) throw NotFoundException({ message: "Booking not found" });
+
+  if (booking.status === BookingStatusEnum.Cancelled) {
+    throw ConflictException({ message: "Booking is already cancelled" });
+  }
+
+  const event = await EventModel.findById(booking.event);
+  if (event.startAt.getTime() - Date.now() < ONE_DAY) {
+    throw BadRequestException({
+      message: "You can cancel only up to 24 hours before the event",
+    });
+  }
+
+  const cancelled = await BookingModel.findOneAndUpdate(
+    { _id: booking._id, status: BookingStatusEnum.Confirmed },
+    { status: BookingStatusEnum.Cancelled, cancelledAt: new Date() },
+    { new: true },
+  );
+  if (!cancelled) {
+    throw ConflictException({ message: "Booking is already cancelled" });
+  }
+
+  await EventModel.updateOne(
+    { _id: booking.event },
+    { $inc: { bookedSeats: -booking.seats } },
+  );
+
+  return cancelled;
 };

@@ -6,282 +6,200 @@ import {
   ForbiddenException,
   NotFoundException,
   UserRoleEnum,
-} from "../../common/index.js";
+} from "../../Common/index.js";
+import { BookingModel, EventModel } from "../../DB/index.js";
 
-import {
-  BookingModel,
-  EventModel,
-  countDocuments,
-  createOne,
-  deleteOne,
-  find,
-  findOneAndUpdate,
-  findOneById,
-} from "../../DB/index.js";
-
-const isAdmin = (user) => user?.role === UserRoleEnum.Admin;
-
-const canManage = (user, event) =>
-  isAdmin(user) || event.organizer.equals(user._id);
-
-const pagination = (query) => {
-  const page = Math.max(Number(query.page) || 1, 1);
-  const limit = Math.min(Math.max(Number(query.limit) || 10, 1), 100);
-
-  return { page, limit, skip: (page - 1) * limit };
-};
-
-const present = (event) => {
-  const data = event.toObject();
-  delete data.__v;
-
+export const createEvent = async (body, user) => {
+  const event = await EventModel.create({ ...body, organizer: user._id });
   return {
-    ...data,
-    availableSeats: data.capacity - data.bookedSeats,
+    ...event.toObject(),
+    availableSeats: event.capacity - event.bookedSeats,
   };
 };
 
-export const createEvent = async (body, user) => {
-  const event = await createOne({
-    model: EventModel,
-    data: { ...body, organizer: user._id },
-  });
-
-  return present(event);
-};
-
 export const listEvents = async (query, user) => {
-  const { page, limit, skip } = pagination(query);
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 10;
+  const skip = (page - 1) * limit;
 
   const filters = {};
 
-  if (!isAdmin(user)) {
-    if (user?.role === UserRoleEnum.Organizer) {
-      filters.$or = [
-        { status: EventStatusEnum.Published },
-        { organizer: user._id },
-      ];
-    } else {
-      filters.status = EventStatusEnum.Published;
-    }
+  if (user?.role === UserRoleEnum.Admin) {
+  } else if (user?.role === UserRoleEnum.Organizer) {
+    filters.$or = [
+      { status: EventStatusEnum.Published },
+      { organizer: user._id },
+    ];
+  } else {
+    filters.status = EventStatusEnum.Published;
   }
 
   if (query.search) {
-    filters.title = {
-      $regex: query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      $options: "i",
-    };
+    const text = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    filters.title = { $regex: text, $options: "i" };
   }
 
   if (query.category) {
-    filters.category = {
-      $regex: `^${query.category}$`,
-      $options: "i",
-    };
+    filters.category = query.category;
   }
 
   if (query.from || query.to) {
     filters.startAt = {};
-
     if (query.from) filters.startAt.$gte = new Date(query.from);
     if (query.to) filters.startAt.$lte = new Date(query.to);
   }
 
-  const sort = {
-    [query.sortBy === "price" ? "price" : "startAt"]:
-      query.order === "desc" ? -1 : 1,
-  };
+  const sortField = query.sortBy === "price" ? "price" : "startAt";
+  const sortOrder = query.order === "desc" ? -1 : 1;
 
-  const [events, total] = await Promise.all([
-    find({
-      model: EventModel,
-      filters,
-      sort,
-      skip,
-      limit,
-      select: "-__v",
-    }),
-    countDocuments({ model: EventModel, filters }),
-  ]);
+  const events = await EventModel.find(filters)
+    .sort({ [sortField]: sortOrder })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+  const total = await EventModel.countDocuments(filters);
 
-  return {
-    events: events.map(present),
-    pagination: {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    },
-  };
+  const result = events.map((e) => ({
+    ...e,
+    availableSeats: e.capacity - e.bookedSeats,
+  }));
+
+  return { events: result, total, page, limit };
 };
 
 export const getEvent = async (id, user) => {
-  const event = await findOneById({ model: EventModel, id });
+  const event = await EventModel.findById(id);
+  if (!event) throw NotFoundException({ message: "Event not found" });
 
-  if (!event) {
+  const isOwner = user && event.organizer.equals(user._id);
+  const isAdmin = user?.role === UserRoleEnum.Admin;
+
+  if (event.status !== EventStatusEnum.Published && !isOwner && !isAdmin) {
     throw NotFoundException({ message: "Event not found" });
   }
 
-  if (event.status !== EventStatusEnum.Published && !canManage(user, event)) {
-    throw NotFoundException({ message: "Event not found" });
-  }
-
-  return present(event);
+  return {
+    ...event.toObject(),
+    availableSeats: event.capacity - event.bookedSeats,
+  };
 };
 
 export const updateEvent = async (id, body, user) => {
-  const event = await findOneById({ model: EventModel, id });
+  const event = await EventModel.findById(id);
+  if (!event) throw NotFoundException({ message: "Event not found" });
 
-  if (!event) {
-    throw NotFoundException({ message: "Event not found" });
-  }
-
-  if (!canManage(user, event)) {
-    throw ForbiddenException({
-      message: "You can only modify your own events",
-    });
+  const isOwner = event.organizer.equals(user._id);
+  const isAdmin = user.role === UserRoleEnum.Admin;
+  if (!isOwner && !isAdmin) {
+    throw ForbiddenException({ message: "You can only edit your own events" });
   }
 
   if (event.status === EventStatusEnum.Cancelled) {
-    throw ConflictException({
-      message: "Cancelled events cannot be modified",
-    });
+    throw ConflictException({ message: "Cancelled event can't be edited" });
   }
 
-  if (!body.isOnline && !(body.location ?? event.location)) {
+  // لو بقت مش أونلاين لازم يكون فيه مكان
+  const finalIsOnline = body.isOnline ?? event.isOnline;
+  const finalLocation = body.location ?? event.location;
+  if (!finalIsOnline && !finalLocation) {
     throw BadRequestException({
       message: "Location is required for non-online events",
     });
   }
 
-  const filters = {
-    _id: id,
-    status: { $ne: EventStatusEnum.Cancelled },
-  };
+  // الشروط جوه الـ query نفسها عشان تبقى atomic مع أي حجز بيحصل في نفس اللحظة
+  const filter = { _id: id, status: { $ne: EventStatusEnum.Cancelled } };
 
   if (body.capacity !== undefined) {
-    if (body.capacity < event.bookedSeats) {
-      throw BadRequestException({
-        message: "Capacity cannot be less than booked seats",
-      });
-    }
-
-    filters.bookedSeats = { $lte: body.capacity };
+    filter.bookedSeats = { $lte: body.capacity };
   }
-
   if (body.status === EventStatusEnum.Draft) {
-    if (event.bookedSeats > 0) {
-      throw BadRequestException({
-        message: "Cannot unpublish an event that has bookings",
-      });
-    }
-
-    filters.bookedSeats = 0;
+    filter.bookedSeats = { ...(filter.bookedSeats ?? {}), $lte: 0 };
+    if (body.capacity !== undefined) filter.bookedSeats.$lte = 0; // الأضيق يكسب
   }
 
-  const updated = await findOneAndUpdate({
-    model: EventModel,
-    filters,
-    update: { $set: body },
-  });
+  const updated = await EventModel.findOneAndUpdate(
+    filter,
+    { $set: body },
+    { new: true, runValidators: true },
+  );
 
   if (!updated) {
-    throw ConflictException({
-      message: "Event was modified, please retry",
+    // نعرف السبب عشان نرجّع رسالة واضحة
+    const fresh = await EventModel.findById(id);
+    if (!fresh) throw NotFoundException({ message: "Event not found" });
+    if (fresh.status === EventStatusEnum.Cancelled) {
+      throw ConflictException({ message: "Cancelled event can't be edited" });
+    }
+    if (body.status === EventStatusEnum.Draft && fresh.bookedSeats > 0) {
+      throw BadRequestException({
+        message: "Can't unpublish an event that has bookings",
+      });
+    }
+    throw BadRequestException({
+      message: `Capacity can't be less than booked seats (${fresh.bookedSeats})`,
     });
   }
 
-  return present(updated);
+  return {
+    ...updated.toObject(),
+    availableSeats: updated.capacity - updated.bookedSeats,
+  };
 };
 
 export const deleteEvent = async (id, user) => {
-  const event = await findOneById({ model: EventModel, id });
+  const event = await EventModel.findById(id);
+  if (!event) throw NotFoundException({ message: "Event not found" });
 
-  if (!event) {
-    throw NotFoundException({ message: "Event not found" });
-  }
-
-  if (!canManage(user, event)) {
+  const isOwner = event.organizer.equals(user._id);
+  const isAdmin = user.role === UserRoleEnum.Admin;
+  if (!isOwner && !isAdmin) {
     throw ForbiddenException({
       message: "You can only delete your own events",
     });
   }
 
+  await EventModel.updateOne(
+    { _id: id },
+    { status: EventStatusEnum.Cancelled },
+  );
+
   const hasBookings = await BookingModel.exists({ event: id });
 
   if (!hasBookings) {
-    await deleteOne({ model: EventModel, filter: { _id: id } });
-
-    return { deleted: true, cancelled: false };
+    await EventModel.deleteOne({ _id: id });
+    return { deleted: true };
   }
-
-  await findOneAndUpdate({
-    model: EventModel,
-    filters: { _id: id },
-    update: {
-      $set: {
-        status: EventStatusEnum.Cancelled,
-        bookedSeats: 0,
-      },
-    },
-  });
 
   const result = await BookingModel.updateMany(
-    {
-      event: id,
-      status: { $ne: BookingStatusEnum.Cancelled },
-    },
-    {
-      $set: {
-        status: BookingStatusEnum.Cancelled,
-        cancelledAt: new Date(),
-      },
-    },
+    { event: id, status: BookingStatusEnum.Confirmed },
+    { status: BookingStatusEnum.Cancelled, cancelledAt: new Date() },
   );
+  await EventModel.updateOne({ _id: id }, { bookedSeats: 0 });
 
-  return {
-    deleted: false,
-    cancelled: true,
-    cancelledBookings: result.modifiedCount,
-  };
+  return { deleted: false, cancelledBookings: result.modifiedCount };
 };
-
 export const getEventBookings = async (id, query, user) => {
-  const event = await findOneById({ model: EventModel, id });
+  const event = await EventModel.findById(id);
+  if (!event) throw NotFoundException({ message: "Event not found" });
 
-  if (!event) {
-    throw NotFoundException({ message: "Event not found" });
-  }
-
-  if (!canManage(user, event)) {
+  const isOwner = event.organizer.equals(user._id);
+  const isAdmin = user.role === UserRoleEnum.Admin;
+  if (!isOwner && !isAdmin) {
     throw ForbiddenException({
-      message: "You can only view bookings of your own events",
+      message: "You can only see bookings of your own events",
     });
   }
 
-  const { page, limit, skip } = pagination(query);
-  const filters = { event: id };
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 10;
 
-  const [bookings, total] = await Promise.all([
-    find({
-      model: BookingModel,
-      filters,
-      populate: { path: "user", select: "name email" },
-      sort: { createdAt: -1 },
-      skip,
-      limit,
-      select: "-__v",
-    }),
-    countDocuments({ model: BookingModel, filters }),
-  ]);
+  const bookings = await BookingModel.find({ event: id })
+    .populate("user", "name email")
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit);
+  const total = await BookingModel.countDocuments({ event: id });
 
-  return {
-    bookings,
-    pagination: {
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    },
-  };
+  return { bookings, total, page, limit };
 };

@@ -4,7 +4,7 @@ import { config } from "dotenv";
 export const NODE_ENV = process.env.NODE_ENV ?? "development";
 
 const envPath = {
-  development: resolve("./config/.env.development"),
+  development: resolve("./config/.env.example"),
 };
 config({ path: envPath[NODE_ENV] ?? envPath.development });
 export const SERVER_PORT = parseInt(process.env.SERVER_PORT ?? 3000);
@@ -19,6 +19,7 @@ export const USER_REFRESH_TOKEN_SECRET_KEY =
   process.env.USER_REFRESH_TOKEN_SECRET_KEY;
 export const ADMIN_REFRESH_TOKEN_SECRET_KEY =
   process.env.ADMIN_REFRESH_TOKEN_SECRET_KEY;
+
 export const ACCESS_TOKEN_EXPIRES_IN = parseInt(
   process.env.ACCESS_TOKEN_EXPIRES_IN ?? 900,
 );

@@ -1,26 +1,34 @@
 import { Router } from "express";
-import { authentication, validation } from "../../middlewares/index.js";
-import { successResponse } from "../../Common/index.js";
 import {
-  createBookingSchema,
+  authentication,
+  authorization,
+  validation,
+} from "../../middlewares/index.js";
+import { successResponse, UserRoleEnum } from "../../Common/index.js";
+import {
   cancelBookingSchema,
+  createBookingSchema,
 } from "./booking.validation.js";
 import {
+  cancelBooking,
   createBooking,
   getMyBookings,
-  cancelBooking,
 } from "./booking.service.js";
+
 const router = Router();
 
+const attendee = [authentication(), authorization(UserRoleEnum.User)];
+
+// POST /api/events/:id/bookings
 router.post(
   "/events/:id/bookings",
-  authentication(),
+  ...attendee,
   validation(createBookingSchema),
   async (req, res) => {
     const booking = await createBooking(
       req.params.id,
-      req.user.sub,
-      req.body.quantity,
+      req.user,
+      req.body.seats,
     );
     return successResponse({
       res,
@@ -31,32 +39,24 @@ router.post(
   },
 );
 
-// Get My Bookings
-router.get("/bookings/me", authentication(), async (req, res) => {
-  const bookings = await getMyBookings(req.user.sub);
-
-  return successResponse({
-    res,
-    status: 200,
-    message: "Bookings retrieved successfully",
-    data: { bookings },
-  });
+// GET /api/bookings/me
+router.get("/bookings/me", ...attendee, async (req, res) => {
+  const bookings = await getMyBookings(req.user);
+  return successResponse({ res, data: { bookings } });
 });
 
+// PATCH /api/bookings/:id/cancel
 router.patch(
   "/bookings/:id/cancel",
   authentication(),
   validation(cancelBookingSchema),
   async (req, res) => {
-    const booking = await cancelBooking(req.params.id, req.user.sub);
-
+    const booking = await cancelBooking(req.params.id, req.user);
     return successResponse({
       res,
-      status: 200,
       message: "Booking cancelled successfully",
       data: { booking },
     });
   },
 );
-
 export default router;

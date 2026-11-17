@@ -5,7 +5,7 @@ import {
   optionalAuthentication,
   validation,
 } from "../../middlewares/index.js";
-import { successResponse, UserRoleEnum } from "../../common/index.js";
+import { successResponse, UserRoleEnum } from "../../Common/index.js";
 import {
   createEventSchema,
   eventBookingsSchema,
@@ -55,11 +55,10 @@ router.post(
   validation(createEventSchema),
   async (req, res) => {
     const event = await createEvent(req.body, req.user);
-
     return successResponse({
       res,
       status: 201,
-      message: "Event created",
+      message: "Event created successfully",
       data: { event },
     });
   },
@@ -71,7 +70,11 @@ router.patch(
   validation(updateEventSchema),
   async (req, res) => {
     const event = await updateEvent(req.params.id, req.body, req.user);
-    return successResponse({ res, message: "Event updated", data: { event } });
+    return successResponse({
+      res,
+      message: "Event updated successfully",
+      data: { event },
+    });
   },
 );
 
@@ -81,12 +84,11 @@ router.delete(
   validation(eventIdSchema),
   async (req, res) => {
     const result = await deleteEvent(req.params.id, req.user);
-
     return successResponse({
       res,
-      message: result.cancelled
-        ? "Event cancelled and its bookings were cancelled"
-        : "Event deleted",
+      message: result.deleted
+        ? "Event deleted successfully"
+        : "Event has bookings, so it was cancelled and its bookings were cancelled",
       data: result,
     });
   },

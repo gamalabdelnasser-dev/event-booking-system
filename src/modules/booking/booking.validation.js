@@ -1,23 +1,15 @@
 import joi from "joi";
+import { generalValidationFields } from "../../Common/index.js";
 
+// POST /api/events/:id/bookings
 export const createBookingSchema = {
-  params: joi
-    .object({
-      id: joi.string().hex().length(24).required(),
-    })
-    .required(),
-
+  params: joi.object({ id: generalValidationFields.id.required() }).required(),
   body: joi
-    .object({
-      quantity: joi.number().integer().min(1).max(15).required(),
-    })
+    .object({ seats: generalValidationFields.seats.required() })
     .required(),
 };
 
+// PATCH /api/bookings/:id/cancel
 export const cancelBookingSchema = {
-  params: joi
-    .object({
-      id: joi.string().hex().length(24).required(),
-    })
-    .required(),
+  params: joi.object({ id: generalValidationFields.id.required() }).required(),
 };

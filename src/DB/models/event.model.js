@@ -1,27 +1,59 @@
 import mongoose from "mongoose";
-import { EventStatusEnum } from "../../common/enums/index.js";
+import { EventStatusEnum } from "../../Common/index.js";
 
 const eventSchema = new mongoose.Schema(
   {
     title: {
       type: String,
-      required: true,
+      required: [true, "Event title is required"],
       trim: true,
       minLength: 3,
       maxLength: 100,
     },
-    description: { type: String, required: true, trim: true, minLength: 10 },
-    category: { type: String, required: true, trim: true },
-    location: { type: String, trim: true },
-    isOnline: { type: Boolean, default: false },
-    startAt: { type: Date, required: true },
-    capacity: { type: Number, required: true, min: 1 },
-    bookedSeats: { type: Number, default: 0, min: 0 },
-    price: { type: Number, required: true, min: 0 },
+    description: {
+      type: String,
+      required: [true, "Event description is required"],
+      trim: true,
+    },
+    category: {
+      type: String,
+      required: [true, "Event category is required"],
+      trim: true,
+    },
+    location: {
+      type: String,
+      trim: true,
+      required: function () {
+        return !this.isOnline;
+      },
+    },
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
+    startAt: {
+      type: Date,
+      required: [true, "Event start date is required"],
+    },
+    capacity: {
+      type: Number,
+      required: [true, "Event capacity is required"],
+      min: 1,
+    },
     status: {
       type: String,
       enum: Object.values(EventStatusEnum),
       default: EventStatusEnum.Draft,
+    },
+    bookedSeats: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    price: {
+      type: Number,
+      required: [true, "Event price is required"],
+      min: 0,
     },
     organizer: {
       type: mongoose.Schema.Types.ObjectId,
@@ -29,19 +61,10 @@ const eventSchema = new mongoose.Schema(
       required: true,
     },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+  },
 );
-
-eventSchema.pre("validate", function () {
-  if (!this.isOnline && !this.location) {
-    this.invalidate("location", "Location is required for non-online events");
-  }
-});
-
-eventSchema.index({ status: 1, startAt: 1 });
-eventSchema.index({ organizer: 1 });
-eventSchema.index({ category: 1 });
-eventSchema.index({ title: 1 });
 
 export const EventModel =
   mongoose.models.Event || mongoose.model("Event", eventSchema);
